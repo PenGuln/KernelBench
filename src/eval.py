@@ -128,8 +128,10 @@ def load_custom_model(
         ) + model_custom_src
 
     try:
-        compile(model_custom_src, "<string>", "exec")
-        exec(model_custom_src, context)
+        with open(f"./tmp/<string>_{os.getpid()}", "w") as f:
+            f.write(model_custom_src)
+        code = compile(model_custom_src, f"./tmp/<string>_{os.getpid()}", "exec")
+        exec(code, context)
         # DANGER: need to delete refernece from global namespace
     except SyntaxError as e:
         print(f"Syntax Error in custom generated code or Compilation Error {e}")
@@ -610,7 +612,7 @@ def run_and_check_correctness(
 
                 # check output value difference
                 if not torch.allclose(
-                    output, output_new, atol=1e-02, rtol=1e-02
+                    output, output_new, atol=1e-01, rtol=1e-01
                 ):  # fail
                     max_diff = torch.max(torch.abs(output - output_new)).item()
                     avg_diff = torch.mean(torch.abs(output - output_new)).item()

@@ -10,8 +10,9 @@ from datasets import load_dataset
 
 from src.dataset import construct_kernelbench_dataset
 from src.eval import eval_kernel_against_ref
-from src.prompt_constructor import prompt_generate_custom_cuda_from_prompt_template
+from src.prompt_constructor import prompt_generate_custom_cuda_from_prompt_template, prompt_generate_custom_triton_from_prompt_template
 from src.utils import extract_first_code, set_gpu_arch, read_file, create_inference_server_from_presets, maybe_multithread
+from src.utils import VLLMInferenceServer
 
 """
 Batch Generate Samples for Particular Level
@@ -97,7 +98,7 @@ def generate_sample_single(work: WorkArgs, config: GenerationConfig, dataset, in
     
 
     # Construct Prompt   
-    custom_cuda_prompt = prompt_generate_custom_cuda_from_prompt_template(ref_arch_src)
+    custom_cuda_prompt = prompt_generate_custom_triton_from_prompt_template(ref_arch_src)
     if config.log_prompt:
         prompt_path = os.path.join(run_dir, f"level_{config.level}_problem_{work.problem_id}_sample_{work.sample_id}_prompt.txt")
         with open(prompt_path, "w") as f:
@@ -184,11 +185,14 @@ def main(config: GenerationConfig):
 
     # Create inference function with config parameters
     # We provide some presets in utils but you can also pass in your own, see query_server for more details
-    inference_server = create_inference_server_from_presets(server_type=config.server_type,
-                                                        model_name=config.model_name,
-                                                        temperature=config.temperature,
-                                                        max_tokens=config.max_tokens,
-                                                        verbose=config.verbose)
+    if config.server_type == "vllm":
+        inference_server = VLLMInferenceServer(model_path=config.model_name, world_size=4, temperature=config.temperature, max_tokens=config.max_tokens)
+    else:
+        inference_server = create_inference_server_from_presets(server_type=config.server_type,
+                                                            model_name=config.model_name,
+                                                            temperature=config.temperature,
+                                                            max_tokens=config.max_tokens,
+                                                            verbose=config.verbose)
 
     # Launch workers
     generation_results = maybe_multithread(generate_sample_launcher, 

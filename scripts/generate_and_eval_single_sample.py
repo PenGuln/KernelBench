@@ -8,7 +8,7 @@ from datasets import load_dataset
 
 from src.dataset import construct_kernelbench_dataset
 from src.eval import eval_kernel_against_ref
-from src.prompt_constructor import prompt_generate_custom_cuda_from_prompt_template
+from src.prompt_constructor import prompt_generate_custom_cuda_from_prompt_template, prompt_generate_custom_triton_from_prompt_template
 from src.utils import extract_first_code, query_server, set_gpu_arch, read_file, create_inference_server_from_presets
 
 """
@@ -127,7 +127,7 @@ def main(config: EvalConfig):
     
 
 
-    custom_cuda_prompt = prompt_generate_custom_cuda_from_prompt_template(ref_arch_src)
+    custom_cuda_prompt = prompt_generate_custom_triton_from_prompt_template(ref_arch_src)
     if config.log_prompt:
         with open(os.path.join(config.logdir, f"prompt_level_{config.level}_problem_{config.problem_id}.txt"), "w") as f:
             f.write(custom_cuda_prompt)

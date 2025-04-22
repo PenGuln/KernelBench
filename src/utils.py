@@ -48,6 +48,46 @@ FIREWORKS_API_KEY = os.environ.get("FIREWORKS_API_KEY")
 # Inference Helpers
 ########################################################
 
+import warnings
+from vllm import LLM, SamplingParams
+
+class VLLMInferenceServer:
+    def __init__(self, model_path, world_size, temperature = None, max_tokens = None):     
+        # load a base model and tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        if self.tokenizer.chat_template is None:                         # add default chat template
+            warnings.warn("No chat_template found, using default chat_template.")
+            self.tokenizer.chat_template = "{% for message in messages %}\n{% if message['role'] == 'user' %}\n{{ '<|user|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'system' %}\n{{ '<|system|>\n' + message['content'] + eos_token }}\n{% elif message['role'] == 'assistant' %}\n{{ '<|assistant|>\n'  + message['content'] + eos_token }}\n{% endif %}\n{% if loop.last and add_generation_prompt %}\n{{ '<|assistant|>' }}\n{% endif %}\n{% endfor %}"
+
+        self.llm = LLM(
+            model=model_path,
+            tensor_parallel_size=world_size,
+        )
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+    def __call__(self, 
+                prompt: str | list[dict],  # string if normal prompt, list of dicts if chat prompt,
+                system_prompt: str = "You are a helpful assistant",  # only used for chat prompts
+                temperature: float = 0.0,
+                top_p: float = 1.0, # nucleus sampling
+                top_k: int = 50, 
+                max_tokens: int = 128,  # max output tokens to generate
+    ):
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt = True)
+        if self.temperature:
+            temperature = self.temperature
+        if self.max_tokens:
+            max_tokens = self.max_tokens
+        sampling_params = SamplingParams(temperature = temperature, top_p=top_p, top_k=top_k, max_tokens=max_tokens)
+        outputs = list(map(lambda x: x.outputs[0].text, 
+                                self.llm.generate([text], sampling_params)))
+        return outputs[0]
+
 @cache
 def load_deepseek_tokenizer():
     # TODO: Should we update this for new deepseek? Same tokenizer?
