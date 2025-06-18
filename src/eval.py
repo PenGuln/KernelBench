@@ -290,7 +290,13 @@ def build_compile_cache_with_capturing(
 
     return returncode, stdout.decode('utf-8'), stderr.decode('utf-8')
 
-
+def replace_triton_with_pass(content):
+    import ast, astor
+    tree = ast.parse(content)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.decorator_list and node.decorator_list[0].value.id == "triton" and node.decorator_list[0].attr == "jit":
+            node.body = [ast.Pass()]
+    return astor.to_source(tree)
 
 
 def eval_kernel_against_ref(
@@ -324,7 +330,8 @@ def eval_kernel_against_ref(
     torch.cuda.set_device(device)
 
     context = {}
-
+    context_new = {}
+    context_new_empty = {}
     if verbose:
         print(f"[Eval] Start Evalulation! on device: {device}")
         print("[Eval] Loading Original Model")
@@ -355,7 +362,10 @@ def eval_kernel_against_ref(
     try:
         os.environ["TORCH_USE_CUDA_DSA"] = "1"  # compile with device side assertion
         # add hash for later to distinguish between multi-turn kernels
-        ModelNew = load_custom_model(custom_model_src, context, build_dir)
+        ModelNew = load_custom_model(custom_model_src, context_new, build_dir)
+        empty_model_src = replace_triton_with_pass(custom_model_src)
+        ModelNew_empty = load_custom_model(empty_model_src, context_new_empty, build_dir)
+        print(empty_model_src)
         torch.cuda.synchronize(device=device)  # not sure if this is too much
     except Exception as e:
         print(
@@ -370,10 +380,14 @@ def eval_kernel_against_ref(
                 f"[Eval] Lock file error during compilation, Please retry. Error: {e}"
             )
             graceful_eval_cleanup(context, device)
+            graceful_eval_cleanup(context_new, device)
+            graceful_eval_cleanup(context_new_empty, device)
             return None
         else:
             metadata["compilation_error"] = e
             graceful_eval_cleanup(context, device)
+            graceful_eval_cleanup(context_new, device)
+            graceful_eval_cleanup(context_new_empty, device)
             return KernelExecResult(
                 compiled=False, metadata=metadata
             )  # skip further steps
@@ -383,7 +397,10 @@ def eval_kernel_against_ref(
         with torch.no_grad():
             set_seed(seed_num)  # set seed for reproducible weights
             custom_model = ModelNew(*init_inputs)
+            set_seed(seed_num)
+            custom_model_empty = ModelNew_empty(*init_inputs)
             assert hasattr(custom_model, "forward")
+            assert hasattr(custom_model_empty, "forward")
             torch.cuda.synchronize(device=device)
         if verbose:
             print("[Eval] New Model with Custom CUDA Kernel Loaded")
@@ -393,6 +410,8 @@ def eval_kernel_against_ref(
         )
         # TODO: add metadata for runtime error e.g. error in launching kernel, illegal memory access, ...
         graceful_eval_cleanup(context, device)
+        graceful_eval_cleanup(context_new, device)
+        graceful_eval_cleanup(context_new_empty, device)
         metadata["runtime_error"] = e
         return KernelExecResult(
             compiled=True, correctness=False, metadata=metadata
@@ -407,6 +426,7 @@ def eval_kernel_against_ref(
         kernel_exec_result = run_and_check_correctness(
             original_model,
             custom_model,
+            custom_model_empty,
             get_inputs,
             metadata=metadata,
             num_correct_trials=num_correct_trials,
@@ -457,6 +477,8 @@ def eval_kernel_against_ref(
             kernel_exec_result.metadata["error_during_performance"] = e
 
     graceful_eval_cleanup(context, device)
+    graceful_eval_cleanup(context_new, device)
+    graceful_eval_cleanup(context_new_empty, device)
     return kernel_exec_result
 
 
@@ -546,6 +568,7 @@ def time_execution_with_cuda_event(
 def run_and_check_correctness(
     original_model_instance: nn.Module,
     new_model_instance: nn.Module,
+    new_model_instance_empty: nn.Module,
     get_inputs_fn: callable,
     metadata: dict,
     num_correct_trials: int,
@@ -569,6 +592,37 @@ def run_and_check_correctness(
     ]
 
     with torch.no_grad():
+        set_seed(7)
+        inputs = get_inputs_fn()
+        inputs = [
+            x.cuda(device=device) if isinstance(x, torch.Tensor) else x
+            for x in inputs
+        ]
+        set_seed(7)
+        model = original_model_instance.cuda(device=device)
+        set_seed(7)
+        model_empty = new_model_instance_empty.cuda(device=device)
+        set_seed(7)
+        model_new = new_model_instance.cuda(device=device)
+        output = model(*inputs)
+        torch.cuda.synchronize(device=device)
+
+        try:
+            output_new = model_empty(*inputs)
+            torch.cuda.synchronize(device=device)
+            max_diff = torch.max(torch.abs(output - output_new)).item()
+            avg_diff = torch.mean(torch.abs(output - output_new)).item()
+            if output.shape == output_new.shape and torch.allclose(output, output_new, atol=1e-02, rtol=1e-02):
+                metadata = register_and_format_exception(
+                    "kernel_issue",
+                    f"Get correct output with empty model",
+                    metadata,
+                )
+                return KernelExecResult(
+                    compiled=True, correctness=False, metadata=metadata
+                )
+        except Exception as e:
+            pass
 
         for trial in range(num_correct_trials):
 

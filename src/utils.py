@@ -70,8 +70,8 @@ class VLLMInferenceServer:
                 prompt: str | list[dict],  # string if normal prompt, list of dicts if chat prompt,
                 system_prompt: str = "You are a helpful assistant",  # only used for chat prompts
                 temperature: float = 0.0,
-                top_p: float = 1.0, # nucleus sampling
-                top_k: int = 50, 
+                top_p: float = 0.8, # nucleus sampling
+                top_k: int = 20,
                 max_tokens: int = 128,  # max output tokens to generate
     ):
         messages=[
@@ -83,7 +83,7 @@ class VLLMInferenceServer:
             temperature = self.temperature
         if self.max_tokens:
             max_tokens = self.max_tokens
-        sampling_params = SamplingParams(temperature = temperature, top_p=top_p, top_k=top_k, max_tokens=max_tokens)
+        sampling_params = SamplingParams(temperature = temperature, top_p=top_p, top_k=top_k, max_tokens=max_tokens, repetition_penalty=1.05)
         outputs = list(map(lambda x: x.outputs[0].text, 
                                 self.llm.generate([text], sampling_params)))
         return outputs[0]
